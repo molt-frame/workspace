@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "github": {
+      "version": "1.0.0",
+      "installedAt": 1770213971121
+    },
+    "github-pr": {
+      "version": "1.0.0",
+      "installedAt": 1770213974061
+    },
+    "pr-reviewer": {
+      "version": "1.0.0",
+      "installedAt": 1770213976729
+    }
+  }
+}
