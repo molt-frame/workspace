@@ -44,6 +44,14 @@
     "web-deploy-github": {
       "version": "1.0.0",
       "installedAt": 1770214960542
+    },
+    "ai-code-review": {
+      "version": "1.0.1",
+      "installedAt": 1770215068275
+    },
+    "secret-scanner": {
+      "version": "1.0.1",
+      "installedAt": 1770215071548
     }
   }
 }
