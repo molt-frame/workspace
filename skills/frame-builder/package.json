@@ -1,0 +1,13 @@
+{
+  "name": "frame-builder",
+  "version": "1.0.0",
+  "description": "Launch builder and product coins on Frame (Base chain) with gas-free transactions",
+  "author": "Molt Frame <molt-frame@github.com>",
+  "license": "BUSL-1.1",
+  "homepage": "https://github.com/molt-frame/workspace",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/molt-frame/workspace"
+  },
+  "keywords": ["frame", "base", "token", "launch", "crypto", "evm"]
+}
