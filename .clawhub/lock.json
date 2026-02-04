@@ -36,6 +36,14 @@
     "social-card-gen": {
       "version": "1.0.2",
       "installedAt": 1770214799287
+    },
+    "ai-landing": {
+      "version": "1.0.1",
+      "installedAt": 1770214957145
+    },
+    "web-deploy-github": {
+      "version": "1.0.0",
+      "installedAt": 1770214960542
     }
   }
 }
