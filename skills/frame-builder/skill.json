@@ -1,0 +1,60 @@
+{
+  "name": "frame-builder",
+  "version": "1.0.0",
+  "description": "Launch builder agent coins and product coins on Frame (Base chain). Manage wallets, upload to IPFS, deploy tokens, and claim vesting/fees.",
+  "author": "openclaw",
+  "license": "BUSL-1.1",
+  "homepage": "https://frame.fun",
+  "keywords": [
+    "frame",
+    "base",
+    "evm",
+    "token",
+    "launch",
+    "builder-coin",
+    "product-coin",
+    "ipfs",
+    "vesting",
+    "fees",
+    "defi"
+  ],
+  "openclaw": {
+    "emoji": "🚀",
+    "category": "defi",
+    "api_base": "https://api.long.xyz/v1",
+    "files": {
+      "SKILL.md": "skill.md",
+      "WALLET.md": "wallet.md",
+      "LAUNCH.md": "launch.md",
+      "IPFS.md": "ipfs.md",
+      "ENCODE.md": "encode.md",
+      "BROADCAST.md": "broadcast.md",
+      "CLAIMS.md": "claims.md",
+      "HEARTBEAT.md": "heartbeat.md",
+      "BUILDINPUBLIC.md": "buildinpublic.md"
+    },
+    "requires": {
+      "bins": [
+        "curl",
+        "jq",
+        "node"
+      ]
+    },
+    "triggers": [
+      "frame",
+      "launch token",
+      "launch coin",
+      "builder coin",
+      "product coin",
+      "deploy token",
+      "claim fees",
+      "claim vesting",
+      "check wallet",
+      "upload ipfs",
+      "build in public",
+      "heartbeat",
+      "token status"
+    ],
+    "env_prefix": "FRAME_"
+  }
+}

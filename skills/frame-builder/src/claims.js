@@ -1,120 +1,335 @@
-#!/usr/bin/env node
-/**
- * Frame Builder - Claims
- * Claim vesting tokens and trading fees
- */
+// claims.js
+import { 
+  createPublicClient, 
+  createWalletClient, 
+  http,
+  encodeFunctionData,
+  encodeAbiParameters,
+  keccak256,
+  formatEther 
+} from 'viem';
+import { base } from 'viem/chains';
+import { privateKeyToAccount } from 'viem/accounts';
+import { readFileSync } from 'fs';
 
-const fs = require('fs');
-const path = require('path');
+// Contract addresses
+const MULTICURVE_INITIALIZER = '0x65dE470Da664A5be139A5D812bE5FDa0d76CC951';
+const MULTICURVE_HOOKS = '0x892D3C2B4ABEAAF67d52A7B29783E2161B7CaD40';
+const RPC_URL = 'https://mainnet.base.org';
 
-const WALLET_PATH = path.join(process.env.HOME, '.evm-wallet.json');
-const TOKENS_DIR = path.join(process.env.HOME, '.openclaw', 'frame', 'tokens');
-
-function parseArgs() {
-  const args = process.argv.slice(2);
-  const result = { command: args[0] };
-  
-  for (let i = 1; i < args.length; i++) {
-    if (args[i].startsWith('--token=')) {
-      result.token = args[i].split('=')[1];
-    }
+// DERC20 Token ABI (for vesting)
+const derc20Abi = [
+  {
+    name: 'getVestingDataOf',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'account', type: 'address' }],
+    outputs: [
+      { name: 'total', type: 'uint256' },
+      { name: 'released', type: 'uint256' }
+    ]
+  },
+  {
+    name: 'release',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [],
+    outputs: []
   }
-  
-  return result;
+];
+
+// UniswapV4MulticurveInitializer ABI (for getting pool state)
+const initializerAbi = [
+  {
+    name: 'getState',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'asset', type: 'address' }],
+    outputs: [
+      { name: 'numeraire', type: 'address' },
+      { name: 'status', type: 'uint8' },
+      { 
+        name: 'poolKey', 
+        type: 'tuple',
+        components: [
+          { name: 'currency0', type: 'address' },
+          { name: 'currency1', type: 'address' },
+          { name: 'fee', type: 'uint24' },
+          { name: 'tickSpacing', type: 'int24' },
+          { name: 'hooks', type: 'address' }
+        ]
+      },
+      { name: 'farTick', type: 'int24' }
+    ]
+  }
+];
+
+// MulticurveHooks ABI (for collecting fees)
+const multicurveHooksAbi = [
+  {
+    name: 'collectFees',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [{ name: 'poolId', type: 'bytes32' }],
+    outputs: [
+      { name: 'fees0', type: 'uint128' },
+      { name: 'fees1', type: 'uint128' }
+    ]
+  }
+];
+
+// Compute poolId from PoolKey (keccak256 of encoded PoolKey)
+function computePoolId(poolKey) {
+  const encoded = encodeAbiParameters(
+    [
+      { name: 'currency0', type: 'address' },
+      { name: 'currency1', type: 'address' },
+      { name: 'fee', type: 'uint24' },
+      { name: 'tickSpacing', type: 'int24' },
+      { name: 'hooks', type: 'address' }
+    ],
+    [poolKey.currency0, poolKey.currency1, poolKey.fee, poolKey.tickSpacing, poolKey.hooks]
+  );
+  return keccak256(encoded);
 }
 
+// Pool status enum
+const PoolStatus = {
+  0: 'NotInitialized',
+  1: 'Initializing',
+  2: 'Active',
+  3: 'Migrating',
+  4: 'Migrated'
+};
+
+// Load wallet
 function loadWallet() {
-  if (!fs.existsSync(WALLET_PATH)) {
-    console.error('No wallet found. Run: node setup.js');
-    process.exit(1);
-  }
-  return JSON.parse(fs.readFileSync(WALLET_PATH, 'utf8'));
+  const walletPath = `${process.env.HOME}/.evm-wallet.json`;
+  const wallet = JSON.parse(readFileSync(walletPath, 'utf-8'));
+  return wallet;
 }
 
-function findToken(address) {
-  if (!fs.existsSync(TOKENS_DIR)) {
-    return null;
-  }
+// Create clients
+function createClients(privateKey) {
+  const account = privateKeyToAccount(privateKey);
   
-  const files = fs.readdirSync(TOKENS_DIR).filter(f => f.endsWith('.json'));
-  for (const f of files) {
-    const token = JSON.parse(fs.readFileSync(path.join(TOKENS_DIR, f), 'utf8'));
-    if (token.address.toLowerCase() === address.toLowerCase()) {
-      return token;
-    }
-  }
-  return null;
+  const publicClient = createPublicClient({
+    chain: base,
+    transport: http(RPC_URL),
+  });
+  
+  const walletClient = createWalletClient({
+    account,
+    chain: base,
+    transport: http(RPC_URL),
+  });
+  
+  return { publicClient, walletClient, account };
 }
 
-async function claimVesting(wallet, tokenAddress) {
-  console.log('📥 Claiming vesting tokens...');
-  console.log('');
-  console.log(`  Token: ${tokenAddress}`);
-  console.log(`  Wallet: ${wallet.address}`);
-  console.log('');
+// Get pool state from initializer
+async function getPoolState(tokenAddress) {
+  const wallet = loadWallet();
+  const { publicClient } = createClients(wallet.privateKey);
   
-  // In production:
-  // 1. Check vesting contract for claimable amount
-  // 2. Encode claim transaction
-  // 3. Send via Frame API (gas-free)
-  // 4. Wait for confirmation
+  const [numeraire, status, poolKey, farTick] = await publicClient.readContract({
+    address: MULTICURVE_INITIALIZER,
+    abi: initializerAbi,
+    functionName: 'getState',
+    args: [tokenAddress],
+  });
   
-  console.log('⚠️  Simulation mode - no actual claim made');
-  console.log('');
-  console.log('To claim for real:');
-  console.log('  1. Set FRAME_API_KEY environment variable');
-  console.log('  2. Ensure you have claimable tokens (check heartbeat status)');
+  const poolId = computePoolId(poolKey);
+  
+  return {
+    numeraire,
+    status: PoolStatus[status] || status,
+    statusCode: status,
+    poolKey,
+    poolId,
+    farTick
+  };
 }
 
-async function claimFees(wallet, tokenAddress) {
-  console.log('📥 Claiming trading fees...');
-  console.log('');
-  console.log(`  Token: ${tokenAddress}`);
-  console.log(`  Wallet: ${wallet.address}`);
-  console.log('');
+// Check vesting status
+async function checkVesting(tokenAddress) {
+  const wallet = loadWallet();
+  const { publicClient } = createClients(wallet.privateKey);
   
-  // In production:
-  // 1. Check fees contract for claimable ETH
-  // 2. Encode claim transaction
-  // 3. Send via Frame API (gas-free)
-  // 4. Wait for confirmation
+  const [total, released] = await publicClient.readContract({
+    address: tokenAddress,
+    abi: derc20Abi,
+    functionName: 'getVestingDataOf',
+    args: [wallet.address],
+  });
   
-  console.log('⚠️  Simulation mode - no actual claim made');
-  console.log('');
-  console.log('To claim for real:');
-  console.log('  1. Set FRAME_API_KEY environment variable');
-  console.log('  2. Ensure you have claimable fees (check heartbeat status)');
+  const claimable = total - released;
+  
+  return {
+    total: formatEther(total),
+    released: formatEther(released),
+    claimable: formatEther(claimable),
+    hasClaimable: claimable > 0n
+  };
 }
 
-async function main() {
-  const args = parseArgs();
+// Claim vesting
+async function claimVesting(tokenAddress) {
+  const wallet = loadWallet();
+  const { publicClient, walletClient, account } = createClients(wallet.privateKey);
   
-  if (!args.command || args.command === 'help') {
-    console.log('Usage:');
-    console.log('  node claims.js vesting --token=0x...  - Claim vesting tokens');
-    console.log('  node claims.js fees --token=0x...     - Claim trading fees');
-    console.log('');
-    console.log('Token vesting: 10% of supply over 12 months');
-    console.log('Trading fees: 50% of all trading fees');
-    process.exit(0);
+  // Check claimable
+  const [total, released] = await publicClient.readContract({
+    address: tokenAddress,
+    abi: derc20Abi,
+    functionName: 'getVestingDataOf',
+    args: [account.address],
+  });
+  
+  if (total - released === 0n) {
+    return { success: false, message: 'No vesting tokens to claim' };
   }
   
-  if (!args.token) {
-    console.error('Error: --token=0x... is required');
-    process.exit(1);
-  }
+  // Claim
+  const hash = await walletClient.sendTransaction({
+    to: tokenAddress,
+    data: encodeFunctionData({
+      abi: derc20Abi,
+      functionName: 'release',
+    }),
+  });
   
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  
+  return {
+    success: true,
+    hash,
+    blockNumber: receipt.blockNumber.toString()
+  };
+}
+
+// Check fees - get pool state and poolId
+async function checkFees(tokenAddress) {
   const wallet = loadWallet();
   
-  if (args.command === 'vesting') {
-    await claimVesting(wallet, args.token);
-  } else if (args.command === 'fees') {
-    await claimFees(wallet, args.token);
-  } else {
-    console.error(`Unknown command: ${args.command}`);
-    console.log('Use: vesting, fees, or help');
-    process.exit(1);
+  try {
+    const poolState = await getPoolState(tokenAddress);
+    
+    return {
+      tokenAddress,
+      poolId: poolState.poolId,
+      numeraire: poolState.numeraire,
+      status: poolState.status,
+      poolKey: {
+        currency0: poolState.poolKey.currency0,
+        currency1: poolState.poolKey.currency1,
+        fee: poolState.poolKey.fee,
+        tickSpacing: poolState.poolKey.tickSpacing,
+        hooks: poolState.poolKey.hooks
+      },
+      wallet: wallet.address,
+      note: poolState.status === 'Active' 
+        ? 'Pool is active. Fees accumulate from trading.' 
+        : `Pool status: ${poolState.status}. Fees available when active.`
+    };
+  } catch (error) {
+    return {
+      tokenAddress,
+      wallet: wallet.address,
+      error: 'Pool not found or not initialized',
+      note: 'The pool may not exist yet. Trading must occur first.'
+    };
   }
 }
 
-main();
+// Claim fees
+async function claimFees(tokenAddress) {
+  const wallet = loadWallet();
+  const { publicClient, walletClient } = createClients(wallet.privateKey);
+  
+  // Get pool state and compute poolId
+  const poolState = await getPoolState(tokenAddress);
+  
+  if (poolState.status !== 'Active') {
+    return { 
+      success: false, 
+      message: `Pool not active. Status: ${poolState.status}`,
+      poolId: poolState.poolId
+    };
+  }
+  
+  // Collect fees
+  const hash = await walletClient.writeContract({
+    address: MULTICURVE_HOOKS,
+    abi: multicurveHooksAbi,
+    functionName: 'collectFees',
+    args: [poolState.poolId],
+  });
+  
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  
+  return {
+    success: true,
+    hash,
+    poolId: poolState.poolId,
+    blockNumber: receipt.blockNumber.toString()
+  };
+}
+
+// CLI
+const [,, action, ...args] = process.argv;
+
+async function main() {
+  if (action === 'vesting') {
+    const tokenAddress = args.find(a => a.startsWith('--token='))?.split('=')[1];
+    if (!tokenAddress) {
+      console.log('Usage: node claims.js vesting --token=0x... [--check]');
+      process.exit(1);
+    }
+    
+    if (args.includes('--check')) {
+      const status = await checkVesting(tokenAddress);
+      console.log(JSON.stringify(status, null, 2));
+    } else {
+      const result = await claimVesting(tokenAddress);
+      console.log(JSON.stringify(result, null, 2));
+    }
+  } else if (action === 'fees') {
+    const tokenAddress = args.find(a => a.startsWith('--token='))?.split('=')[1];
+    if (!tokenAddress) {
+      console.log('Usage: node claims.js fees --token=0x... [--check]');
+      process.exit(1);
+    }
+    
+    if (args.includes('--check')) {
+      const status = await checkFees(tokenAddress);
+      console.log(JSON.stringify(status, null, 2));
+    } else {
+      const result = await claimFees(tokenAddress);
+      console.log(JSON.stringify(result, null, 2));
+    }
+  } else if (action === 'pool') {
+    // New action: get pool state directly
+    const tokenAddress = args.find(a => a.startsWith('--token='))?.split('=')[1];
+    if (!tokenAddress) {
+      console.log('Usage: node claims.js pool --token=0x...');
+      process.exit(1);
+    }
+    
+    const state = await getPoolState(tokenAddress);
+    console.log(JSON.stringify({
+      tokenAddress,
+      poolId: state.poolId,
+      numeraire: state.numeraire,
+      status: state.status,
+      poolKey: state.poolKey
+    }, null, 2));
+  } else {
+    console.log('Usage:');
+    console.log('  node claims.js vesting --token=0x... [--check]');
+    console.log('  node claims.js fees --token=0x... [--check]');
+    console.log('  node claims.js pool --token=0x...');
+  }
+}
+
+main().catch(console.error);

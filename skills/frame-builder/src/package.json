@@ -1,0 +1,16 @@
+{
+  "name": "frame-builder-scripts",
+  "version": "1.0.0",
+  "description": "Scripts for Frame Builder skill - wallet management, IPFS upload, and claims",
+  "type": "module",
+  "scripts": {
+    "setup": "node setup.js",
+    "balance": "node balance.js",
+    "upload": "node upload.js"
+  },
+  "dependencies": {
+    "sharp": "^0.34.5",
+    "undici": "^6.6.0",
+    "viem": "^2.7.0"
+  }
+}

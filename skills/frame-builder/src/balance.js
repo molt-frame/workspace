@@ -1,81 +1,130 @@
 #!/usr/bin/env node
 /**
  * Frame Builder - Balance Check
- * Check wallet ETH balance on Base
+ * 
+ * Checks wallet balance on Base chain.
+ * 
+ * Usage:
+ *   node balance.js base --json    # JSON output for Base
+ *   node balance.js base           # Human-readable output
  */
 
-const fs = require('fs');
-const path = require('path');
-const https = require('https');
+import { readFileSync, existsSync } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
 
-const WALLET_PATH = path.join(process.env.HOME, '.evm-wallet.json');
-const BASE_RPC = 'https://mainnet.base.org';
+const WALLET_PATH = join(homedir(), '.evm-wallet.json');
 
-function loadWallet() {
-  if (!fs.existsSync(WALLET_PATH)) {
-    console.error('No wallet found. Run: node setup.js');
-    process.exit(1);
-  }
-  return JSON.parse(fs.readFileSync(WALLET_PATH, 'utf8'));
+const CHAINS = {
+  base: {
+    name: 'Base',
+    rpc: 'https://mainnet.base.org',
+    symbol: 'ETH',
+    chainId: 8453,
+  },
+};
+
+function parseArgs() {
+  const args = process.argv.slice(2);
+  const chain = args.find(a => !a.startsWith('--')) || 'base';
+  return {
+    chain,
+    json: args.includes('--json'),
+  };
 }
 
-async function getBalance(address) {
-  return new Promise((resolve, reject) => {
-    const data = JSON.stringify({
+function loadWallet() {
+  if (!existsSync(WALLET_PATH)) {
+    return null;
+  }
+  
+  try {
+    return JSON.parse(readFileSync(WALLET_PATH, 'utf-8'));
+  } catch (error) {
+    return null;
+  }
+}
+
+async function getBalance(address, rpcUrl) {
+  const response = await fetch(rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
       jsonrpc: '2.0',
+      id: 1,
       method: 'eth_getBalance',
       params: [address, 'latest'],
-      id: 1
-    });
-
-    const url = new URL(BASE_RPC);
-    const options = {
-      hostname: url.hostname,
-      port: 443,
-      path: url.pathname,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': data.length
-      }
-    };
-
-    const req = https.request(options, (res) => {
-      let body = '';
-      res.on('data', chunk => body += chunk);
-      res.on('end', () => {
-        try {
-          const json = JSON.parse(body);
-          if (json.result) {
-            const wei = BigInt(json.result);
-            const eth = Number(wei) / 1e18;
-            resolve(eth);
-          } else {
-            reject(new Error(json.error?.message || 'Unknown error'));
-          }
-        } catch (e) {
-          reject(e);
-        }
-      });
-    });
-
-    req.on('error', reject);
-    req.write(data);
-    req.end();
+    }),
   });
+  
+  const data = await response.json();
+  
+  if (data.error) {
+    throw new Error(data.error.message);
+  }
+  
+  // Convert hex to decimal, then to ETH
+  const balanceWei = BigInt(data.result);
+  const balanceEth = Number(balanceWei) / 1e18;
+  
+  return balanceEth.toFixed(6);
 }
 
 async function main() {
+  const { chain, json } = parseArgs();
+  
+  // Validate chain
+  const chainConfig = CHAINS[chain];
+  if (!chainConfig) {
+    const error = { success: false, error: `Unknown chain: ${chain}` };
+    if (json) {
+      console.log(JSON.stringify(error));
+    } else {
+      console.error(`❌ Unknown chain: ${chain}`);
+      console.error(`   Supported: ${Object.keys(CHAINS).join(', ')}`);
+    }
+    process.exit(1);
+  }
+  
+  // Load wallet
   const wallet = loadWallet();
-  console.log(`Wallet: ${wallet.address}`);
-  console.log('Chain: Base Mainnet (8453)');
-  console.log('');
+  if (!wallet) {
+    const error = { success: false, error: 'No wallet found. Run setup.js first.' };
+    if (json) {
+      console.log(JSON.stringify(error));
+    } else {
+      console.error('❌ No wallet found');
+      console.error('   Run: node setup.js');
+    }
+    process.exit(1);
+  }
   
   try {
-    const balance = await getBalance(wallet.address);
-    console.log(`Balance: ${balance.toFixed(6)} ETH`);
-  } catch (err) {
-    console.error('Error fetching balance:', err.message);
+    const balance = await getBalance(wallet.address, chainConfig.rpc);
+    
+    const result = {
+      success: true,
+      address: wallet.address,
+      balance,
+      symbol: chainConfig.symbol,
+      chain,
+    };
+    
+    if (json) {
+      console.log(JSON.stringify(result));
+    } else {
+      console.log(`💰 Wallet Balance (${chainConfig.name})`);
+      console.log(`   Address: ${wallet.address}`);
+      console.log(`   Balance: ${balance} ${chainConfig.symbol}`);
+    }
+  } catch (error) {
+    const errorResult = { success: false, error: error.message };
+    if (json) {
+      console.log(JSON.stringify(errorResult));
+    } else {
+      console.error(`❌ Error: ${error.message}`);
+    }
+    process.exit(1);
   }
 }
 

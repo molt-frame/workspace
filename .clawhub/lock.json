@@ -52,6 +52,18 @@
     "secret-scanner": {
       "version": "1.0.1",
       "installedAt": 1770215071548
+    },
+    "pumpclaw": {
+      "version": "1.0.0",
+      "installedAt": 1770215288267
+    },
+    "solana-skills": {
+      "version": "0.1.2",
+      "installedAt": 1770215290932
+    },
+    "mplx-genesis": {
+      "version": "0.1.0",
+      "installedAt": 1770215293180
     }
   }
 }
